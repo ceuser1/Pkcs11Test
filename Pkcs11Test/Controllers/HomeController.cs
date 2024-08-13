@@ -14,22 +14,24 @@ namespace Pkcs11Test.Controllers
             _logger = logger;
         }
 
+        
+
         public IActionResult Index()
         {
-            using var hsm = new HsmAdapter();
-            hsm.Login();
-            var keys = hsm.GenerateKeyPair();
-            Debug.WriteLine("Private key object handle: " + keys.Item2);
+            //using var hsm = new HsmAdapter();
+            //hsm.Login();
+            //var keys = hsm.GenerateKeyPair();
+            //Debug.WriteLine("Private key object handle: " + keys.Item2);
 
             return View();
         }
 
         public IActionResult Privacy()
         {
-            using var hsm = new HsmAdapter();
-            hsm.Login();
-            var keys = hsm.GenerateKeyPair();
-            Debug.WriteLine("Private key object handle: " + keys.Item2);
+            //using var hsm = new HsmAdapter();
+            //hsm.Login();
+            //var keys = hsm.GenerateKeyPair();
+            //Debug.WriteLine("Private key object handle: " + keys.Item2);
 
             return View();
         }

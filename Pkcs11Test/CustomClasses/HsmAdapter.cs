@@ -1,80 +1,87 @@
 ﻿using Net.Pkcs11Interop.Common;
 using Net.Pkcs11Interop.HighLevelAPI;
+using Serilog;
 using ISession = Net.Pkcs11Interop.HighLevelAPI.ISession;
 
 namespace Pkcs11Test.CustomClasses
 {
-    public class HsmAdapter : IDisposable
+    public class HsmAdapter : IHsmAdapter, IDisposable
     {
+        private bool _isInitialized;
         private IPkcs11Library _pkcs11;
-        private ISession _session;
+        private ISlot _slot;
+        private ISession _masterSession;
 
-        public void Login()
+        private readonly object _lockInitialize = new ();
+        public void Initialize(string library, int slotNumber, string userPin)
         {
-            const string library = "/pkcs11/libcs_pkcs11_R2.so";
-            // const string library = "/pkcs11/pkcs11-logger-x64.so";
-            const int slotNumber = 0;
-            const string userPin = "12345678";
-
-            // PKCS11.
-            var factories = new Pkcs11InteropFactories();
-            _pkcs11 = factories.Pkcs11LibraryFactory.LoadPkcs11Library(factories, library, AppType.MultiThreaded);
-
-            // Slot.
-            var slots = _pkcs11.GetSlotList(SlotsType.WithOrWithoutTokenPresent);
-            var slot = slots.FirstOrDefault(p => p.SlotId == slotNumber);
-            if (slot == null)
+            if (_isInitialized)
             {
-                throw new Exception("Error logging in");
+                return;
             }
 
-            // Login.
-            var session = slot.OpenSession(SessionType.ReadWrite);
-            session.Login(CKU.CKU_USER, userPin);
-            _session = session;
+            lock (_lockInitialize)
+            {
+                Log.Warning("Initialize START");
+
+                //// const string library = "/pkcs11/libcs_pkcs11_R2.so";
+                //// const string library = "/pkcs11/pkcs11-logger-x64.so";
+                //const string library = @"C:\src\_Temp\Pkcs11Test\Files\cs_pkcs11_R2.dll";
+                //const int slotNumber = 0;
+                //const string userPin = "12345678";
+
+                // PKCS11.
+                var factories = new Pkcs11InteropFactories();
+                Log.Warning("LoadPkcs11Library START");
+                _pkcs11 = factories.Pkcs11LibraryFactory.LoadPkcs11Library(factories, library, AppType.MultiThreaded);
+                Log.Warning("LoadPkcs11Library END");
+
+                // Slot.
+                Log.Warning("GetSlotList START");
+                var slots = _pkcs11.GetSlotList(SlotsType.WithOrWithoutTokenPresent);
+                Log.Warning("GetSlotList END");
+                _slot = slots.FirstOrDefault(p => p.SlotId == (ulong)slotNumber);
+                if (_slot == null)
+                {
+                    throw new Exception("Error initializing pkcs11 - unknown slot nr " + slotNumber);
+                }
+
+                // Login.
+                Log.Warning("OpenSession START");
+                _masterSession = _slot.OpenSession(SessionType.ReadWrite);
+                Log.Warning("OpenSession END");
+                Log.Warning("Login START");
+                _masterSession.Login(CKU.CKU_USER, userPin);
+                Log.Warning("Login END");
+
+                _isInitialized = true;
+
+                Log.Warning("Initialize END");
+            }
         }
 
-        public Tuple<ulong, ulong> GenerateKeyPair()
+        public ISession OpenSession()
         {
-            var name = Guid.NewGuid().ToString().Replace("-", "").Substring(0, 10);
+            Log.Warning("OpenSession START");
 
-            // Key identifiers.
-            var publicKeyName = name + " public";
-            var publicKeyId = _session.GenerateRandom(20);
-            var privateKeyName = name + " private";
-            var privateKeyId = _session.GenerateRandom(20);
+            if (!_isInitialized)
+            {
+                throw new Exception("Error opening a new session - pkcs11 not initialized");
+            }
+            if (_masterSession == null)
+            {
+                throw new Exception("Error opening a new session - _masterSession is null");
+            }
+            if (_slot == null)
+            {
+                throw new Exception("Error opening a new session - _slot is null");
+            }
 
-            // Key attributes.
-            var publicKeyAttributes = new List<IObjectAttribute>();
-            var privateKeyAttributes = new List<IObjectAttribute>();
-            var mechanism = CKM.CKM_ECDSA_KEY_PAIR_GEN;
+            var session = _slot.OpenSession(SessionType.ReadWrite);
+            Log.Warning("Successfully opened new session with id " + session.SessionId);
 
-            // Public.
-            publicKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_ECDSA_PARAMS, new byte[] { 0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07 }));
-            publicKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_ID, publicKeyId));
-            publicKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_LABEL, publicKeyName));
-            publicKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_PRIVATE, false));
-            publicKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_TOKEN, true));
-            publicKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_VERIFY, true));
-
-            // Private.
-            privateKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_ID, privateKeyId));
-            privateKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_LABEL, privateKeyName));
-            privateKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_PRIVATE, true));
-            privateKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_SENSITIVE, false));
-            privateKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_SIGN, true));
-            privateKeyAttributes.Add(_session.Factories.ObjectAttributeFactory.Create(CKA.CKA_TOKEN, true));
-
-            // Generate.
-            _session.GenerateKeyPair(
-                _session.Factories.MechanismFactory.Create(mechanism),
-                publicKeyAttributes,
-                privateKeyAttributes,
-                out var publicObjectHandle,
-                out var privateObjectHandle
-            );
-
-            return new Tuple<ulong, ulong>(publicObjectHandle.ObjectId, privateObjectHandle.ObjectId);
+            Log.Warning("OpenSession END");
+            return session;
         }
 
         #region Dispose
@@ -99,12 +106,10 @@ namespace Pkcs11Test.CustomClasses
 
             if (disposing)
             {
-                _session?.Logout();
-                _session?.Dispose();
-                _session = null;
-
+                _masterSession?.Logout();
+                _masterSession?.CloseSession();
+                //Thread.Sleep(1000);
                 _pkcs11?.Dispose();
-                _pkcs11 = null;
             }
 
             // Cleanup unmanaged objects.
